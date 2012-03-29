@@ -184,6 +184,8 @@ def execute(*cmd, **kwargs):
     :param run_as_root:        True | False. Defaults to False. If set to True,
                                the command is prefixed by the command specified
                                in the root_helper FLAG.
+    :process_timeout:          Defaults to 0. If set to 0, the command is not
+                               timeout. Timeout seconds for opened process.
 
     :raises exception.Error: on receiving unknown arguments
     :raises exception.ProcessExecutionError:
@@ -204,6 +206,7 @@ def execute(*cmd, **kwargs):
     attempts = kwargs.pop('attempts', 1)
     run_as_root = kwargs.pop('run_as_root', False)
     shell = kwargs.pop('shell', False)
+    process_timeout = kwargs.pop('process_timeout', 0)
 
     if len(kwargs):
         raise exception.Error(_('Got unknown keyword args '
@@ -226,10 +229,19 @@ def execute(*cmd, **kwargs):
                                    shell=shell)
             result = None
             if process_input is not None:
-                result = obj.communicate(process_input)
-            else:
-                result = obj.communicate()
-            obj.stdin.close()  # pylint: disable=E1101
+                obj.stdin.write(process_input)  # pylint: disable=E1101
+                obj.stdin.close()  # pylint: disable=E1101
+            start = datetime.datetime.now()
+            while obj.poll() is None:
+                now = datetime.datetime.now()
+                if process_timeout and \
+                        (now - start).total_seconds() > process_timeout:
+                    raise exception.ProcessExecutionError(
+                            cmd=' '.join(cmd),
+                            description="Timeout. pid=%s process_timeout=%s"
+                                            % (obj.pid, process_timeout))
+                greenthread.sleep(0.01)
+            result = (obj.stdout.read(), obj.stderr.read())
             _returncode = obj.returncode  # pylint: disable=E1101
             if _returncode:
                 LOG.debug(_('Result was %s') % _returncode)

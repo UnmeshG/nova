@@ -418,6 +418,80 @@ class GenericUtilsTestCase(test.TestCase):
             self.assertEqual(fake_execute.uid, os.getuid())
 
 
+class UtilsTestCase(test.TestCase):
+    """Test for nova.utils """
+    def setUp(self):
+        super(UtilsTestCase, self).setUp()
+        self.utils = utils
+        self.utils.clear_time_override()
+
+    def tearDown(self):
+        super(UtilsTestCase, self).tearDown()
+
+    def test_execute_parameter_with_timeout(self):
+        """Test for nova.utils.execute.
+        Verify command execution is successfully with process_timeout."""
+        cmd = 'dir'
+        process_timeout = 10
+        kwargs = dict(process_timeout=process_timeout)
+        stdout_read = 'stdoutread'
+        stderr_read = 'stderrread'
+
+        start = datetime.datetime(2011, 8, 19, 02, 59, 00)
+        now = datetime.datetime(2011, 8, 19, 02, 59, 10)
+        self.mox.StubOutWithMock(self.utils.datetime, 'datetime')
+        self.utils.datetime.datetime.now().AndReturn(start)
+        self.utils.datetime.datetime.now().AndReturn(now)
+        self.mox.StubOutClassWithMocks(self.utils.subprocess, 'Popen')
+        self.stubs.Set(self.utils.subprocess, 'PIPE', None)
+        expected_kwargs = dict(stdin=None,
+                               stdout=None,
+                               stderr=None,
+                               close_fds=True,
+                               shell=False)
+        pmock = self.utils.subprocess.Popen([cmd], **expected_kwargs)
+        pmock.stdout = self.mox.CreateMockAnything()
+        pmock.stdout.read().AndReturn(stdout_read)
+        pmock.stderr = self.mox.CreateMockAnything()
+        pmock.stderr.read().AndReturn(stderr_read)
+        pmock.poll().AndReturn(None)
+        pmock.poll().AndReturn(0)
+        pmock.returncode = 0
+        self.mox.ReplayAll()
+
+        actual = self.utils.execute(cmd, **kwargs)
+
+        self.assertEquals(stdout_read, actual[0])
+        self.assertEquals(stderr_read, actual[1])
+
+    def test_execute_exception_timeout(self):
+        """Test for nova.utils.execute.
+        Verify command execution is timeout."""
+        cmd = 'dir'
+        process_timeout = 10
+        kwargs = dict(process_timeout=process_timeout)
+
+        start = datetime.datetime(2011, 8, 19, 02, 59, 00)
+        now = datetime.datetime(2011, 8, 19, 02, 59, 11)
+        self.mox.StubOutWithMock(self.utils.datetime, 'datetime')
+        self.utils.datetime.datetime.now().AndReturn(start)
+        self.utils.datetime.datetime.now().AndReturn(now)
+        self.mox.StubOutClassWithMocks(self.utils.subprocess, 'Popen')
+        self.stubs.Set(self.utils.subprocess, 'PIPE', None)
+        expected_kwargs = dict(stdin=None,
+                               stdout=None,
+                               stderr=None,
+                               close_fds=True,
+                               shell=False)
+        pmock = self.utils.subprocess.Popen([cmd], **expected_kwargs)
+        pmock.poll().AndReturn(None)
+        pmock.pid = 12345678
+        self.mox.ReplayAll()
+
+        self.assertRaises(exception.ProcessExecutionError,
+            self.utils.execute, cmd, **kwargs)
+
+
 class IsUUIDLikeTestCase(test.TestCase):
     def assertUUIDLike(self, val, expected):
         result = utils.is_uuid_like(val)
