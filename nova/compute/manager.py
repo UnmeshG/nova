@@ -2275,10 +2275,12 @@ class ComputeManager(manager.SchedulerDependentManager):
         if curr_time - self._last_host_check > FLAGS.host_state_interval:
             self._last_host_check = curr_time
             LOG.info(_("Updating host status"))
+
+            gt = greenthread.spawn(self.driver.get_host_stats, refresh=True)
+            capabilities = gt.wait()
             # This will grab info about the host and queue it
             # to be sent to the Schedulers.
-            self.update_service_capabilities(
-                self.driver.get_host_stats(refresh=True))
+            self.update_service_capabilities(capabilities)
 
     @manager.periodic_task(ticks_between_runs=10)
     def _sync_power_states(self, context):
@@ -2310,7 +2312,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             greenthread.sleep(0)
             db_power_state = db_instance['power_state']
             try:
-                vm_instance = self.driver.get_info(db_instance)
+                gt = greenthread.spawn(self.driver.get_info, db_instance)
+                vm_instance = gt.wait()
                 vm_power_state = vm_instance['state']
             except exception.InstanceNotFound:
                 # This exception might have been caused by a race condition
@@ -2400,7 +2403,10 @@ class ComputeManager(manager.SchedulerDependentManager):
         :returns: See driver.update_available_resource()
 
         """
-        self.driver.update_available_resource(context, self.host)
+        gt = greenthread.spawn(self.driver.update_available_resource,
+                               context,
+                               self.host)
+        gt.wait()
 
     def add_instance_fault_from_exc(self, context, instance_uuid, fault,
                                     exc_info=None):
