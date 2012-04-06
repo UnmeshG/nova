@@ -37,6 +37,7 @@ from nova import utils
 from nova.api.ec2 import cloud
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.virt import images
@@ -2319,6 +2320,62 @@ class LibvirtConnectionTestCase(test.TestCase):
 
         inst.update(params)
         return db.instance_create(context.get_admin_context(), inst)
+
+    def test_poll_unconfirmed_resizes(self):
+        self.mox.StubOutWithMock(context, 'get_admin_context')
+        self.mox.StubOutWithMock(db, 'migration_get_all_unconfirmed')
+        self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
+        self.mox.StubOutWithMock(db, 'migration_update')
+        self.mox.StubOutWithMock(self.libvirtconnection.compute_api,
+                                'confirm_resize')
+
+        instances = [{'uuid': 'fake_uuid1', 'vm_state': vm_states.ACTIVE,
+                      'task_state': task_states.RESIZE_VERIFY},
+                     {'uuid': 'noexist'},
+                     {'uuid': 'fake_uuid1', 'vm_state': vm_states.DELETED,
+                      'task_state': None},
+                     {'uuid': 'fake_uuid3', 'vm_state': vm_states.ACTIVE,
+                      'task_state': task_states.RESIZE_VERIFY}]
+        migrations = []
+        for i, instance in enumerate(instances, start=1):
+            migrations.append({'id': i, 'instance_uuid': instance['uuid']})
+        resize_confirm_window = 60
+
+        fake_context = 'fake-context'
+        context.get_admin_context().AndReturn(fake_context)
+        db.migration_get_all_unconfirmed(fake_context,
+                resize_confirm_window).AndReturn(migrations)
+
+        # test success (ACTIVE/RESIZE_VERIFY)
+        instance = instances.pop(0)
+        #vmops.LOG.info(mox.IgnoreArg())
+        db.instance_get_by_uuid(fake_context,
+                instance['uuid']).AndReturn(instance)
+        self.libvirtconnection.compute_api.confirm_resize(fake_context,
+                instance)
+
+        # test instance that doesn't exist anymore sets migration to
+        # error
+        instance = instances.pop(0)
+        db.instance_get_by_uuid(fake_context,
+                instance['uuid']).AndRaise(exception.InstanceNotFound)
+        db.migration_update(fake_context, 2, {'status': 'error'})
+
+        # test unconfirmed DELETED instance sets migration to error
+        instance = instances.pop(0)
+        db.instance_get_by_uuid(fake_context,
+                instance['uuid']).AndRaise(exception.InstanceNotFound)
+        db.migration_update(fake_context, 3, {'status': 'error'})
+
+        # test succeeds again (ACTIVE/RESIZE_VERIFY)
+        instance = instances.pop(0)
+        db.instance_get_by_uuid(fake_context,
+                instance['uuid']).AndReturn(instance)
+        self.libvirtconnection.compute_api.confirm_resize(fake_context,
+                instance)
+
+        self.mox.ReplayAll()
+        self.libvirtconnection.poll_unconfirmed_resizes(resize_confirm_window)
 
     def test_migrate_disk_and_power_off_exception(self):
         """Test for nova.virt.libvirt.connection.LivirtConnection

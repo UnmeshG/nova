@@ -56,6 +56,7 @@ from xml.dom import minidom
 from xml.etree import ElementTree
 
 from nova import block_device
+from nova import compute
 from nova.compute import instance_types
 from nova.compute import power_state
 from nova import context as nova_context
@@ -234,6 +235,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         self._disk_cachemode = None
         self.image_cache_manager = imagecache.ImageCacheManager()
+        self.compute_api = compute.API()
 
     @property
     def disk_cachemode(self):
@@ -868,8 +870,28 @@ class LibvirtConnection(driver.ComputeDriver):
                     "older than %(confirm_window)d seconds") % migrations_info)
 
         for migration in migrations:
-            LOG.info(_("Automatically confirming migration %d"), migration.id)
-            self.compute_api.confirm_resize(ctxt, migration.instance_uuid)
+            migration_id = migration['id']
+            instance_uuid = migration['instance_uuid']
+            LOG.info(_("Automatically confirming migration %d"), migration_id)
+            try:
+                instance = db.instance_get_by_uuid(ctxt, instance_uuid)
+            except exception.InstanceNotFound:
+                msg = _("Setting migration %(migration_id)s to error, reason:"
+                        "Instance %(instance_uuid)s not found")
+                LOG.warn(msg % locals())
+                db.migration_update(ctxt, migration_id, {'status': 'error'})
+                continue
+
+            try:
+                self.compute_api.confirm_resize(ctxt, instance)
+            except exception.MigrationNotFoundByStatus:
+                msg = _("Migration status of instance %(migration_id)d has "\
+                        "changed, skipping resize confirmation")
+                LOG.error(msg % locals())
+            except Exception, e:
+                msg = _("Error auto-confirming resize for instance "
+                        "%(instance_uuid)s: %(e)s.  Will retry later.")
+                LOG.error(msg % locals())
 
     def _enable_hairpin(self, instance):
         interfaces = self.get_interfaces(instance['name'])
